@@ -1330,9 +1330,11 @@ mkApiTransactionFromInfo ti (TransactionInfo txid ins outs ws meta depth txtime 
         case meta ^. #status of
             Pending  -> #pendingSince
             InLedger -> #insertedAt
+            Expired  -> #expiresAt
     return $ case meta ^. #status of
         Pending  -> apiTx
         InLedger -> apiTx { depth = Just depth  }
+        Expired  -> apiTx
   where
       drop2nd (a,_,c) = (a,c)
 
@@ -1805,6 +1807,7 @@ mkApiTransaction ti txid ins outs ws (meta, timestamp) txMeta setTimeReference =
         , amount = meta ^. #amount
         , insertedAt = Nothing
         , pendingSince = Nothing
+        , expiresAt = Nothing
         , depth = Nothing
         , direction = ApiT (meta ^. #direction)
         , inputs = [ApiTxInput (fmap toAddressAmount o) (ApiT i) | (i, o) <- ins]

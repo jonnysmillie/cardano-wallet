@@ -410,6 +410,7 @@ instance Arbitrary TxMeta where
         <*> arbitrary
         <*> fmap Quantity arbitrary
         <*> fmap (Quantity . fromIntegral) (arbitrary @Word32)
+        <*> arbitrary
 
 instance Arbitrary TxStatus where
     arbitrary = elements [Pending, InLedger]

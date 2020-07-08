@@ -737,6 +737,7 @@ spec = do
                     , amount = amount (x :: ApiTransaction ('Testnet 0))
                     , insertedAt = insertedAt (x :: ApiTransaction ('Testnet 0))
                     , pendingSince = pendingSince (x :: ApiTransaction ('Testnet 0))
+                    , expiresAt = expiresAt (x :: ApiTransaction ('Testnet 0))
                     , depth = depth (x :: ApiTransaction ('Testnet 0))
                     , direction = direction (x :: ApiTransaction ('Testnet 0))
                     , inputs = inputs (x :: ApiTransaction ('Testnet 0))
@@ -1302,14 +1303,19 @@ instance Arbitrary (ApiTransaction t) where
         txInsertedAt <- case txStatus of
             (ApiT Pending) -> pure Nothing
             (ApiT InLedger) -> arbitrary
+            (ApiT Expired) -> pure Nothing
         txPendingSince <- case txStatus of
             (ApiT Pending) -> arbitrary
             (ApiT InLedger) -> pure Nothing
+            (ApiT Expired) -> arbitrary
+        let txExpiresAt = txInsertedAt
+
         ApiTransaction
             <$> arbitrary
             <*> arbitrary
             <*> pure txInsertedAt
             <*> pure txPendingSince
+            <*> pure txExpiresAt
             <*> arbitrary
             <*> arbitrary
             <*> genInputs
