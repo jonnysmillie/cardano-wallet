@@ -42,6 +42,8 @@ import Cardano.Wallet.Primitive.Types
     , PoolRegistrationCertificate (..)
     , PoolRetirementCertificate (..)
     , SlotNo (..)
+    , StakePoolMetadata (..)
+    , StakePoolTicker (..)
     , getPoolCertificatePoolId
     , getPoolRetirementCertificate
     )
@@ -825,22 +827,44 @@ prop_removePools
     -> [PoolCertificate]
     -> Property
 prop_removePools
-    db@DBLayer {..} certificates =
-        monadicIO (setup >> prop)
+    DBLayer {..} certificates = checkCoverage
+        $ cover 8 (notNull poolsToRemove && notNull poolsToRetain)
+            "remove some pools and retain some pools"
+        $ cover 2 (null poolsToRemove)
+            "remove no pools"
+        $ cover 2 (null poolsToRetain)
+            "retain no pools"
+        $ cover 8 (notNull metadataToRetain && notNull metadataToRemove)
+            "remove some metadata and retain some metadata"
+        $ cover 2 (null metadataToRemove)
+            "remove no metadata"
+        $ cover 2 (null metadataToRetain)
+            "retain no metadata"
+        $ monadicIO (setup >> prop)
   where
     setup = run $ atomically cleanDB
 
     prop = do
         -- Firstly, publish an arbitrary set of pool certificates:
-        run $ mapM_ (uncurry $ putPoolCertificate db) certificatePublications
-        -- Next, read the latest certificates for all pools:
+        run $ atomically $ forM_ certificatePublications $ \case
+            (publicationTime, Registration cert) -> do
+                -- In the case of a pool registration, we also add an
+                -- accompanying mock entry to the metadata table.
+                putPoolRegistration publicationTime cert
+                forM_ (view #poolMetadata cert) $ \(_, metadataHash) ->
+                    putPoolMetadata metadataHash mockPoolMetadata
+            (publicationTime, Retirement cert) ->
+                putPoolRetirement publicationTime cert
+        -- Next, read the latest certificates and metadata for all pools:
         poolIdsWithRegCertsAtStart <- run poolIdsWithRegCerts
         poolIdsWithRetCertsAtStart <- run poolIdsWithRetCerts
+        poolMetadataAtStart <- Map.keysSet <$> run (atomically readPoolMetadata)
         -- Next, remove a subset of the pools:
         run $ atomically $ removePools $ Set.toList poolsToRemove
-        -- Finally, see which certificates remain:
+        -- Finally, see which certificates and metadata remain:
         poolIdsWithRegCertsAtEnd <- run poolIdsWithRegCerts
         poolIdsWithRetCertsAtEnd <- run poolIdsWithRetCerts
+        poolMetadataAtEnd <- Map.keysSet <$> run (atomically readPoolMetadata)
         monitor $ counterexample $ T.unpack $ T.unlines
             [ "All pools: "
             , T.unlines (toText <$> Set.toList pools)
@@ -848,6 +872,22 @@ prop_removePools
             , T.unlines (toText <$> Set.toList poolsToRemove)
             , "Pools to retain:"
             , T.unlines (toText <$> Set.toList poolsToRetain)
+            , "Pools with registration certificates at start:"
+            , T.unlines (toText <$> Set.toList poolIdsWithRegCertsAtStart)
+            , "Pools with registration certificates at end:"
+            , T.unlines (toText <$> Set.toList poolIdsWithRegCertsAtEnd)
+            , "Pools with retirement certificates at start:"
+            , T.unlines (toText <$> Set.toList poolIdsWithRetCertsAtStart)
+            , "Pools with retirement certificates at end:"
+            , T.unlines (toText <$> Set.toList poolIdsWithRetCertsAtEnd)
+            , "Metadata to remove:"
+            , T.unlines (toText <$> Set.toList metadataToRemove)
+            , "Metadata to retain:"
+            , T.unlines (toText <$> Set.toList metadataToRetain)
+            , "Metadata at start:"
+            , T.unlines (toText <$> Set.toList poolMetadataAtStart)
+            , "Metadata at end:"
+            , T.unlines (toText <$> Set.toList poolMetadataAtEnd)
             ]
         assertWith "subset rule for registrations" $
             poolIdsWithRegCertsAtEnd `Set.isSubsetOf` poolsToRetain
@@ -863,6 +903,11 @@ prop_removePools
         assertWith "difference rule for retirements" $
             poolIdsWithRetCertsAtStart `Set.difference` poolsToRemove
                 == poolIdsWithRetCertsAtEnd
+        assertWith "difference rule for metadata" $
+            poolMetadataAtStart `Set.difference` poolMetadataAtEnd
+                == metadataToRemove
+        assertWith "equality rule for metadata" $
+            poolMetadataAtEnd == metadataToRetain
 
     -- The complete set of all pools.
     pools = Set.fromList $ getPoolCertificatePoolId <$> certificates
@@ -872,6 +917,26 @@ prop_removePools
         & Set.toList
         & L.splitAt (length pools `div` 2)
         & bimap Set.fromList Set.fromList
+
+    metadataToRemove = certificates
+        & mapMaybe toRegistrationCertificate
+        & filter ((`Set.member` poolsToRemove) . view #poolId)
+        & mapMaybe (view #poolMetadata)
+        & fmap snd
+        & Set.fromList
+
+    metadataToRetain = certificates
+        & mapMaybe toRegistrationCertificate
+        & filter ((`Set.member` poolsToRetain) . view #poolId)
+        & mapMaybe (view #poolMetadata)
+        & fmap snd
+        & Set.fromList
+
+    toRegistrationCertificate
+        :: PoolCertificate -> Maybe PoolRegistrationCertificate
+    toRegistrationCertificate = \case
+        Registration c -> Just c
+        Retirement _ -> Nothing
 
     certificatePublications
         :: [(CertificatePublicationTime, PoolCertificate)]
@@ -885,6 +950,15 @@ prop_removePools
     poolIdsWithRetCerts =
         fmap (Set.fromList . fmap (view #poolId . snd) . catMaybes)
             <$> atomically $ mapM readPoolRetirement $ Set.toList pools
+
+    mockPoolMetadata = StakePoolMetadata
+        { ticker = StakePoolTicker "MOCK"
+        , name = "MOCK"
+        , description = Nothing
+        , homepage = "http://mock.pool/"
+        }
+
+    notNull = not . null
 
 prop_listRegisteredPools
     :: DBLayer IO
