@@ -96,6 +96,8 @@ import Data.Generics.Internal.VL.Lens
     ( over, view )
 import Data.Map.Strict
     ( Map )
+import Data.Maybe
+    ( mapMaybe )
 import Data.Ord
     ( Down (..) )
 import Data.Quantity
@@ -396,6 +398,15 @@ mRollbackTo ti point = do
 
 mRemovePools :: [PoolId] -> ModelOp ()
 mRemovePools poolsToRemove = do
+    registrations <- get #registrations
+    let metadataHashesToRemove = registrations
+            & Map.filterWithKey (\(_, k) _ -> k `Set.member` poolsToRemoveSet)
+            & Map.elems
+            & mapMaybe (view #poolMetadata)
+            & fmap snd
+            & Set.fromList
+    modify #metadata
+        $ flip Map.withoutKeys metadataHashesToRemove
     modify #distributions
         $ Map.map $ L.filter $ \(p, _) -> retain p
     modify #pools
